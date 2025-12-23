@@ -10,7 +10,6 @@ using System.Linq;
 using System.Net;
 using System.Text.RegularExpressions;
 using System.Text;
-using System.Text.Json;
 
 
 namespace WindowsGSM.Plugins
@@ -35,7 +34,7 @@ namespace WindowsGSM.Plugins
         // - Standard Constructor and properties
         public TheIsleLegacy(ServerConfig serverData) : base(serverData) => base.serverData = _serverData = serverData;
         private readonly ServerConfig _serverData;
-        public string Error, Notice;
+        public new string Error, Notice;
 
 
         // - Game server Fixed variables
@@ -391,7 +390,7 @@ namespace WindowsGSM.Plugins
             return File.Exists(filePath);
         }
 
-        public static async Task<string> GetGameMode(string serverData)
+        public static Task<string> GetGameMode(string serverData)
         {
             string defaultGameMode = "game=Survival";
             string[] parts = serverData.Split(';');
@@ -408,7 +407,7 @@ namespace WindowsGSM.Plugins
                 }
             }
 
-            return defaultGameMode;
+            return Task.FromResult(defaultGameMode);
         }
 
         /// <summary>
@@ -500,9 +499,15 @@ namespace WindowsGSM.Plugins
 
             // Only update Game.ini if we successfully retrieved at least one admin
             // If list is empty or all sources failed, keep existing admins unchanged
+            System.Diagnostics.Debug.WriteLine($"Total admins retrieved: {combinedAdminList.Count}");
             if (combinedAdminList.Count > 0)
             {
+                System.Diagnostics.Debug.WriteLine($"Updating Game.ini with {combinedAdminList.Count} admins");
                 UpdateGameIniWithAdmins(gameIniPath, combinedAdminList);
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine("No admins retrieved - keeping existing Game.ini unchanged");
             }
         }
 
@@ -578,23 +583,24 @@ namespace WindowsGSM.Plugins
             // 2. Full URL with query params provided: http://localhost:3000/api/v1/adminlist?gameType=legacy&serverType=survival -> use as-is
             // The query parameters in the URL determine what admins are returned from the API
             string fullUrl;
-            if (apiUrl.Contains("/api/v1/adminlist", StringComparison.OrdinalIgnoreCase))
+            if (apiUrl.IndexOf("/api/v1/adminlist", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 // Full URL already provided (may include query parameters)
                 fullUrl = apiUrl;
                 
-                // Add include filter if provided and URL doesn't already have include param
-                // API uses "include" parameter with comma-separated values: admin,trial,dmadmin,dmtrial
-                if (!string.IsNullOrWhiteSpace(includeFilter) && !fullUrl.Contains("include=", StringComparison.OrdinalIgnoreCase))
+                // Only add include filter if explicitly provided as a parameter
+                // Don't auto-add include=admin if user has already specified query parameters in URL
+                if (!string.IsNullOrWhiteSpace(includeFilter) && fullUrl.IndexOf("include=", StringComparison.OrdinalIgnoreCase) < 0)
                 {
                     string separator = fullUrl.Contains("?") ? "&" : "?";
                     fullUrl += $"{separator}include={includeFilter}";
                 }
-                else if (string.IsNullOrWhiteSpace(includeFilter) && !fullUrl.Contains("include=", StringComparison.OrdinalIgnoreCase))
+                // If user provided full URL with query params, respect it and don't auto-add include=admin
+                // Only add include=admin if URL has no query parameters at all
+                else if (string.IsNullOrWhiteSpace(includeFilter) && !fullUrl.Contains("?") && fullUrl.IndexOf("include=", StringComparison.OrdinalIgnoreCase) < 0)
                 {
-                    // Default to only "admin" type if no include specified
-                    string separator = fullUrl.Contains("?") ? "&" : "?";
-                    fullUrl += $"{separator}include=admin";
+                    // Default to only "admin" type if no include specified AND no query params in URL
+                    fullUrl += "?include=admin";
                 }
             }
             else
@@ -617,6 +623,8 @@ namespace WindowsGSM.Plugins
 
             try
             {
+                System.Diagnostics.Debug.WriteLine($"Fetching admins from API: {fullUrl}");
+                
                 using (WebClient client = new WebClient())
                 {
                     // Set Bearer token in Authorization header if provided
@@ -625,49 +633,53 @@ namespace WindowsGSM.Plugins
                     if (!string.IsNullOrWhiteSpace(bearerToken))
                     {
                         client.Headers.Add("Authorization", $"Bearer {bearerToken}");
+                        System.Diagnostics.Debug.WriteLine("Bearer token added to request");
                     }
                     client.Headers.Add("Content-Type", "application/json");
 
                     // Make GET request to API endpoint
                     string jsonResponse = await client.DownloadStringTaskAsync(fullUrl);
+                    
+                    // Debug: Log the response for troubleshooting
+                    System.Diagnostics.Debug.WriteLine($"API Response received. Length: {jsonResponse?.Length ?? 0}");
+                    if (!string.IsNullOrEmpty(jsonResponse) && jsonResponse.Length > 0)
+                    {
+                        // Log first 200 characters of response for debugging
+                        string preview = jsonResponse.Length > 200 ? jsonResponse.Substring(0, 200) + "..." : jsonResponse;
+                        System.Diagnostics.Debug.WriteLine($"API Response preview: {preview}");
+                    }
 
                     // Parse JSON response
                     // Expected format: [ { "steamId": "76561198000000000", "name": "...", "gameType": "...", ... }, ... ]
                     // Note: We only extract "steamId" - all other fields (name, gameType, serverType, adminType, etc.) are ignored
-                    using (JsonDocument document = JsonDocument.Parse(jsonResponse))
+                    // Using regex to extract steamId values (simple and works without external JSON libraries)
+                    // Pattern matches: "steamId": "value" or "steamId":"value"
+                    if (!string.IsNullOrWhiteSpace(jsonResponse))
                     {
-                        JsonElement root = document.RootElement;
+                        MatchCollection matches = Regex.Matches(jsonResponse, @"""steamId""\s*:\s*""([^""]+)""", RegexOptions.IgnoreCase);
+                        System.Diagnostics.Debug.WriteLine($"Regex found {matches.Count} matches");
                         
-                        // Check if response is an array
-                        if (root.ValueKind == JsonValueKind.Array)
+                        foreach (Match match in matches)
                         {
-                            foreach (JsonElement admin in root.EnumerateArray())
+                            if (match.Groups.Count > 1)
                             {
-                                // Extract steamId from each admin object
-                                // Note: If includetrial=false, we add adminType=admin to the API query to filter server-side
-                                // So we don't need to check adminType here - the API already filtered it
-                                if (admin.TryGetProperty("steamId", out JsonElement steamIdElement))
+                                string steamId = match.Groups[1].Value.Trim();
+                                if (!string.IsNullOrWhiteSpace(steamId))
                                 {
-                                    string steamId = steamIdElement.GetString();
-                                    if (!string.IsNullOrWhiteSpace(steamId))
-                                    {
-                                        steamIds.Add(steamId.Trim());
-                                    }
+                                    steamIds.Add(steamId);
+                                    System.Diagnostics.Debug.WriteLine($"Added Steam ID: {steamId}");
                                 }
                             }
                         }
                     }
+                    
+                    System.Diagnostics.Debug.WriteLine($"Total Steam IDs extracted: {steamIds.Count}");
                 }
             }
             catch (WebException webEx)
             {
                 // Handle HTTP errors (401 Unauthorized, 500 Server Error, etc.)
                 throw new Exception($"API request failed: {webEx.Message}");
-            }
-            catch (JsonException jsonEx)
-            {
-                // Handle JSON parsing errors
-                throw new Exception($"Failed to parse API response: {jsonEx.Message}");
             }
             catch (Exception ex)
             {
