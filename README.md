@@ -50,6 +50,8 @@ You can choose between two modes:
 - **Text-based**: Download admin lists from text files (GitHub, etc.)
 - **API-based**: Fetch admin lists from an API endpoint
 
+You choose by adding `listtype=api` or `listtype=txt` into the start params. Examples will follow.
+
 1. In the servers Start Param option field add in the following (\*Examples with my test files, use your own!)
 
 - `listtype=txt;adminListOne=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Other/adminlist.txt`
