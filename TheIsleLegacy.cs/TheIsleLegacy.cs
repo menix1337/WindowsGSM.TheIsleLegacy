@@ -9,6 +9,8 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Text.RegularExpressions;
+using System.Text;
+using System.Text.Json;
 
 
 namespace WindowsGSM.Plugins
@@ -142,13 +144,18 @@ namespace WindowsGSM.Plugins
                Admin List Mode - OBS: NOT REQUIRED
                - Our goal here is to make adding admins on multiple servers easier than having to manually adjust each server every time they change admins
 
-               Lets load an an admin list from a text file, but only if the adminList=XXX exists in the Param.
+               TWO MODES AVAILABLE: Text-based (txt) and API-based (api)
+               
+               ============================================
+               MODE 1: TEXT-BASED ADMIN LIST (listtype=txt)
+               ============================================
+               Lets load an admin list from a text file, but only if the adminList=XXX exists in the Param.
                - example: 
-               game=Survival;adminList=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Asura/TheIsleLegacy/Adminlist.txt
+               game=Survival;listtype=txt;adminList=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Asura/TheIsleLegacy/Adminlist.txt
 
                Some servers have different admins depending if the server is a Deathmatch type server or not - to help this we can add in a second admin list (adminListTwo) & combine the adminList & adminListTwo
                - example: 
-               game=Survival;adminList=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Asura/TheIsleLegacy/Adminlist.txt;adminListTwo=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Asura/TheIsleLegacy/AdminlistDM.txt
+               game=Survival;listtype=txt;adminList=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Asura/TheIsleLegacy/Adminlist.txt;adminListTwo=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Asura/TheIsleLegacy/AdminlistDM.txt
 
                Then the server will merge and update the lists into the game.ini with the IDs of each line in the text files
 
@@ -171,7 +178,56 @@ namespace WindowsGSM.Plugins
                ServerAdmins=76561197960419842
                ServerAdmins=76561197960419843
 
-               OBS: If admin list is specified, for each time you restart the server it will clear out all admins and re-apply accordingly from the list; if the source .txt files can be found - otherwise it will keep the original game.ini without refreshing the admins (In case the source is down so you suddenly dont have admin)
+               ============================================
+               MODE 2: API-BASED ADMIN LIST (listtype=api)
+               ============================================
+               Fetches admin list from an API endpoint. Bearer token authentication is optional.
+               - example with Bearer token:
+               game=Survival;listtype=api;apibearertoken=your_token_here;apiurl=http://your-api-host:port/api/v1/adminlist
+               
+               - example without Bearer token (if API doesn't require authentication):
+               game=Survival;listtype=api;apiurl=http://your-api-host:port/api/v1/adminlist
+               
+               - example with default filter (only "admin" type):
+               game=Survival;listtype=api;apibearertoken=your_token;apiurl=http://your-api-host:port/api/v1/adminlist
+               
+               - example with include parameter (specify which admin types to include):
+               game=Survival;listtype=api;apibearertoken=your_token;apiurl=http://your-api-host:port/api/v1/adminlist;include=admin,trial
+               
+               - example with include in URL:
+               game=Survival;listtype=api;apibearertoken=your_token;apiurl=http://your-api-host:port/api/v1/adminlist?gameType=legacy&include=admin,trial,dmadmin,dmtrial
+               
+               Note: If apibearertoken is provided, it will be set as "Bearer {token}" in the Authorization header.
+               Note: The "include" parameter filters which admin types to fetch. Valid values: admin, trial, dmadmin, dmtrial (comma-separated).
+               Note: If "include" is not specified, defaults to "admin" (only full admins).
+               Note: You can specify "include" as a parameter (include=admin,trial) or in the URL query string.
+
+               The API endpoint should return JSON in the following format:
+               [
+                 {
+                   "steamId": "76561198000000000"
+                 }
+               ]
+
+               Note: Only the "steamId" field is extracted and used. All other fields are ignored.
+
+               The system will:
+               1. Use the provided apiurl (including any query parameters you specify)
+               2. Make GET request (with Bearer token authentication if apibearertoken is provided)
+               3. Extract steamId values from response
+               4. Update Game.ini with those Steam IDs
+               
+               Example with query parameters in URL:
+               apiurl=http://localhost:3000/api/v1/adminlist?gameType=legacy&serverType=survival
+               
+               The query parameters in the URL determine what admins are returned from the API.
+
+               Example with all parameters:
+               game=Survival;listtype=api;apibearertoken=abc123xyz;apiurl=http://localhost:3000/api/v1/adminlist
+
+               OBS: If admin list is specified, for each time you restart the server it will clear out all admins and re-apply accordingly from the list; 
+               - For txt mode: if the source .txt files can be found - otherwise it will keep the original game.ini without refreshing the admins (In case the source is down so you suddenly dont have admin)
+               - For api mode: if the API is reachable - otherwise it will keep the original game.ini without refreshing the admins (In case the API is down so you suddenly dont have admin)
             */
 
             await UpdateAdminList(_serverData.ServerParam, configPath);
@@ -355,64 +411,329 @@ namespace WindowsGSM.Plugins
             return defaultGameMode;
         }
 
+        /// <summary>
+        /// Updates the admin list in Game.ini based on the configured mode (txt or api).
+        /// Supports both text-based file downloads and API-based admin list fetching.
+        /// </summary>
+        /// <param name="_serverData">Server parameters string containing configuration</param>
+        /// <param name="gameIniPath">Path to the Game.ini file to update</param>
         public static async Task UpdateAdminList(string _serverData, string gameIniPath)
         {
-            string[] splitServerData = _serverData.Split(';');
-            Dictionary<string, string> adminListFiles = new Dictionary<string, string>();
-            foreach (string s in splitServerData)
-            {
-                if (s.StartsWith("adminList", StringComparison.OrdinalIgnoreCase))
-                {
-                    string[] splitAdminList = s.Split('=');
-                    adminListFiles.Add(splitAdminList[0], splitAdminList[1]);
-                }
-            }
+            // Parse server parameters into a dictionary for easy access
+            // Example: "game=Survival;listtype=txt;adminList=https://..." becomes key-value pairs
+            Dictionary<string, string> serverParams = ParseServerParams(_serverData);
+            
+            // Determine which mode to use: "txt" (text-based) or "api" (API-based)
+            // Default to "txt" if not specified for backward compatibility
+            string listType = serverParams.ContainsKey("listtype") 
+                ? serverParams["listtype"].ToLower() 
+                : "txt";
+
             List<string> combinedAdminList = new List<string>();
-            foreach (KeyValuePair<string, string> kvp in adminListFiles)
+
+            if (listType == "api")
             {
+                // ============================================
+                // API MODE: Fetch admins from API endpoint
+                // ============================================
+                // Example params: listtype=api;apibearertoken=abc123;apiurl=http://localhost:3000/api/v1/adminlist
+                
                 try
                 {
-                    using (var client = new WebClient())
+                    combinedAdminList = await FetchAdminsFromApi(serverParams);
+                }
+                catch (Exception ex)
+                {
+                    // If API fails, log error but don't update admin list (keeps last known list)
+                    // This ensures admins remain even if API is temporarily down
+                    System.Diagnostics.Debug.WriteLine($"API Admin List Fetch Failed: {ex.Message}");
+                    return; // Exit early - don't clear existing admins
+                }
+            }
+            else
+            {
+                // ============================================
+                // TEXT MODE: Download and parse text files
+                // ============================================
+                // Example params: listtype=txt;adminList=https://...;adminListTwo=https://...
+                
+                Dictionary<string, string> adminListFiles = new Dictionary<string, string>();
+                foreach (KeyValuePair<string, string> kvp in serverParams)
+                {
+                    // Find all parameters starting with "adminList" (adminList, adminListTwo, adminListThree, etc.)
+                    if (kvp.Key.StartsWith("adminList", StringComparison.OrdinalIgnoreCase))
                     {
-                        string txtFile = await client.DownloadStringTaskAsync(kvp.Value);
-                        string[] lines = txtFile.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
-                        foreach (string line in lines)
+                        adminListFiles.Add(kvp.Key, kvp.Value);
+                    }
+                }
+
+                // Download and combine all admin list files
+                foreach (KeyValuePair<string, string> kvp in adminListFiles)
+                {
+                    try
+                    {
+                        using (var client = new WebClient())
                         {
-                            combinedAdminList.Add(line.Trim());
+                            // Download text file from URL
+                            // Example: https://raw.githubusercontent.com/.../Adminlist.txt
+                            string txtFile = await client.DownloadStringTaskAsync(kvp.Value);
+                            string[] lines = txtFile.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+                            foreach (string line in lines)
+                            {
+                                string trimmedLine = line.Trim();
+                                // Only add non-empty lines (skip blank lines)
+                                if (!string.IsNullOrWhiteSpace(trimmedLine))
+                                {
+                                    combinedAdminList.Add(trimmedLine);
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        // If one file fails, continue with others
+                        // This allows partial success if some files are unavailable
+                        continue;
+                    }
+                }
+            }
+
+            // Only update Game.ini if we successfully retrieved at least one admin
+            // If list is empty or all sources failed, keep existing admins unchanged
+            if (combinedAdminList.Count > 0)
+            {
+                UpdateGameIniWithAdmins(gameIniPath, combinedAdminList);
+            }
+        }
+
+        /// <summary>
+        /// Parses server parameter string into a dictionary.
+        /// Example: "game=Survival;listtype=txt;adminList=https://..." 
+        /// Returns: { "game": "Survival", "listtype": "txt", "adminList": "https://..." }
+        /// </summary>
+        private static Dictionary<string, string> ParseServerParams(string serverData)
+        {
+            Dictionary<string, string> paramsDict = new Dictionary<string, string>();
+            if (string.IsNullOrWhiteSpace(serverData))
+            {
+                return paramsDict;
+            }
+
+            string[] parts = serverData.Split(';');
+            foreach (string part in parts)
+            {
+                if (string.IsNullOrWhiteSpace(part))
+                    continue;
+
+                string[] keyValue = part.Split(new[] { '=' }, 2);
+                if (keyValue.Length == 2)
+                {
+                    string key = keyValue[0].Trim();
+                    string value = keyValue[1].Trim();
+                    if (!string.IsNullOrWhiteSpace(key))
+                    {
+                        paramsDict[key] = value;
+                    }
+                }
+            }
+
+            return paramsDict;
+        }
+
+        /// <summary>
+        /// Fetches admin list from API endpoint using Bearer token authentication.
+        /// Uses the provided API URL as-is, including any query parameters specified by the user.
+        /// </summary>
+        /// <param name="serverParams">Parsed server parameters dictionary</param>
+        /// <returns>List of Steam IDs extracted from API response</returns>
+        private static async Task<List<string>> FetchAdminsFromApi(Dictionary<string, string> serverParams)
+        {
+            List<string> steamIds = new List<string>();
+
+            // Validate required API parameters
+            if (!serverParams.ContainsKey("apiurl"))
+            {
+                throw new Exception("apiurl parameter is required when listtype=api");
+            }
+
+            string apiUrl = serverParams["apiurl"].Trim();
+            
+            // Bearer token is optional - only set if provided
+            // Some APIs may not require authentication
+            string bearerToken = serverParams.ContainsKey("apibearertoken") 
+                ? serverParams["apibearertoken"].Trim() 
+                : null;
+            
+            // Get include parameter for filtering admin types
+            // Valid values: admin,trial,dmadmin,dmtrial (comma-separated)
+            // If not specified, defaults to "admin" (only full admins)
+            // If specified in apiurl, that takes precedence
+            string includeFilter = serverParams.ContainsKey("include") 
+                ? serverParams["include"].Trim() 
+                : null;
+
+            // Build API endpoint URL
+            // Handle both cases:
+            // 1. Base URL provided: http://localhost:3000 -> append /api/v1/adminlist
+            // 2. Full URL with query params provided: http://localhost:3000/api/v1/adminlist?gameType=legacy&serverType=survival -> use as-is
+            // The query parameters in the URL determine what admins are returned from the API
+            string fullUrl;
+            if (apiUrl.Contains("/api/v1/adminlist", StringComparison.OrdinalIgnoreCase))
+            {
+                // Full URL already provided (may include query parameters)
+                fullUrl = apiUrl;
+                
+                // Add include filter if provided and URL doesn't already have include param
+                // API uses "include" parameter with comma-separated values: admin,trial,dmadmin,dmtrial
+                if (!string.IsNullOrWhiteSpace(includeFilter) && !fullUrl.Contains("include=", StringComparison.OrdinalIgnoreCase))
+                {
+                    string separator = fullUrl.Contains("?") ? "&" : "?";
+                    fullUrl += $"{separator}include={includeFilter}";
+                }
+                else if (string.IsNullOrWhiteSpace(includeFilter) && !fullUrl.Contains("include=", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Default to only "admin" type if no include specified
+                    string separator = fullUrl.Contains("?") ? "&" : "?";
+                    fullUrl += $"{separator}include=admin";
+                }
+            }
+            else
+            {
+                // Base URL provided, append endpoint path
+                fullUrl = apiUrl.TrimEnd('/') + "/api/v1/adminlist";
+                
+                // Add include filter
+                if (!string.IsNullOrWhiteSpace(includeFilter))
+                {
+                    // Use provided include parameter
+                    fullUrl += $"?include={includeFilter}";
+                }
+                else
+                {
+                    // Default to only "admin" type if no include specified
+                    fullUrl += "?include=admin";
+                }
+            }
+
+            try
+            {
+                using (WebClient client = new WebClient())
+                {
+                    // Set Bearer token in Authorization header if provided
+                    // Format: "Bearer YOUR_TOKEN"
+                    // Note: apibearertoken is optional - only set header if token is provided
+                    if (!string.IsNullOrWhiteSpace(bearerToken))
+                    {
+                        client.Headers.Add("Authorization", $"Bearer {bearerToken}");
+                    }
+                    client.Headers.Add("Content-Type", "application/json");
+
+                    // Make GET request to API endpoint
+                    string jsonResponse = await client.DownloadStringTaskAsync(fullUrl);
+
+                    // Parse JSON response
+                    // Expected format: [ { "steamId": "76561198000000000", "name": "...", "gameType": "...", ... }, ... ]
+                    // Note: We only extract "steamId" - all other fields (name, gameType, serverType, adminType, etc.) are ignored
+                    using (JsonDocument document = JsonDocument.Parse(jsonResponse))
+                    {
+                        JsonElement root = document.RootElement;
+                        
+                        // Check if response is an array
+                        if (root.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (JsonElement admin in root.EnumerateArray())
+                            {
+                                // Extract steamId from each admin object
+                                // Note: If includetrial=false, we add adminType=admin to the API query to filter server-side
+                                // So we don't need to check adminType here - the API already filtered it
+                                if (admin.TryGetProperty("steamId", out JsonElement steamIdElement))
+                                {
+                                    string steamId = steamIdElement.GetString();
+                                    if (!string.IsNullOrWhiteSpace(steamId))
+                                    {
+                                        steamIds.Add(steamId.Trim());
+                                    }
+                                }
+                            }
                         }
                     }
                 }
-                catch (Exception)
+            }
+            catch (WebException webEx)
+            {
+                // Handle HTTP errors (401 Unauthorized, 500 Server Error, etc.)
+                throw new Exception($"API request failed: {webEx.Message}");
+            }
+            catch (JsonException jsonEx)
+            {
+                // Handle JSON parsing errors
+                throw new Exception($"Failed to parse API response: {jsonEx.Message}");
+            }
+            catch (Exception ex)
+            {
+                // Handle any other errors (network issues, etc.)
+                throw new Exception($"API admin list fetch error: {ex.Message}");
+            }
+
+            return steamIds;
+        }
+
+        /// <summary>
+        /// Updates Game.ini file with the provided list of Steam IDs.
+        /// Removes all existing ServerAdmins entries and adds new ones.
+        /// </summary>
+        /// <param name="gameIniPath">Path to Game.ini file</param>
+        /// <param name="adminIds">List of Steam IDs to add as admins</param>
+        private static void UpdateGameIniWithAdmins(string gameIniPath, List<string> adminIds)
+        {
+            // Read all lines from Game.ini
+            var lines = File.ReadAllLines(gameIniPath).ToList();
+            
+            // Find the section boundaries
+            // Game.ini structure:
+            // [/Script/TheIsle.IGameSession]
+            // ServerAdmins=...
+            // [/script/theisle.igamemode]
+            int startIndex = lines.FindIndex(x => x.StartsWith("[/Script/TheIsle.IGameSession]", StringComparison.OrdinalIgnoreCase));
+            int endIndex = lines.FindIndex(startIndex, x => x.StartsWith("[/script/theisle.igamemode]", StringComparison.OrdinalIgnoreCase));
+
+            if (startIndex == -1 || endIndex == -1)
+            {
+                // If sections not found, can't update - log and return
+                System.Diagnostics.Debug.WriteLine("Could not find required sections in Game.ini");
+                return;
+            }
+
+            // Remove all existing ServerAdmins entries
+            int currentIndex = startIndex + 1;
+            while (currentIndex < endIndex)
+            {
+                if (lines[currentIndex].StartsWith("ServerAdmins=", StringComparison.OrdinalIgnoreCase))
                 {
-                    continue;
+                    lines.RemoveAt(currentIndex);
+                    endIndex--; // Adjust end index since we removed a line
+                }
+                else
+                {
+                    currentIndex++;
                 }
             }
-            if (combinedAdminList.Count > 0)
+
+            // Insert new ServerAdmins entries before the end of the section
+            // Format: ServerAdmins=76561198000000000
+            int insertIndex = endIndex;
+            foreach (string adminId in adminIds)
             {
-                var lines = File.ReadAllLines(gameIniPath).ToList();
-                int startIndex = lines.FindIndex(x => x.StartsWith("[/Script/TheIsle.IGameSession]"));
-                int endIndex = lines.FindIndex(startIndex, x => x.StartsWith("[/script/theisle.igamemode]"));
-                int currentIndex = startIndex + 1;
-                while (currentIndex < endIndex)
-                {
-                    if (lines[currentIndex].StartsWith("ServerAdmins="))
-                    {
-                        lines.RemoveAt(currentIndex);
-                        endIndex--;
-                    }
-                    else
-                    {
-                        currentIndex++;
-                    }
-                }
-                int insertIndex = endIndex;
-                foreach (string adminId in combinedAdminList)
+                // Skip empty or invalid Steam IDs
+                if (!string.IsNullOrWhiteSpace(adminId))
                 {
                     lines.Insert(insertIndex, $"ServerAdmins={adminId}");
                     insertIndex++;
                 }
-                File.WriteAllLines(gameIniPath, lines);
             }
+
+            // Write updated content back to file
+            File.WriteAllLines(gameIniPath, lines);
         }
 
     }

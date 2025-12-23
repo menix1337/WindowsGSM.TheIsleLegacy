@@ -9,7 +9,7 @@
 - Gamemode (Surival / Sandbox) selection
 - Admin lists\*
 
-\*Admin lists is a optional way for you to support having one or multiple text files (Admin lists are textfiles with lines of Steam IDs) and the ability to add one or multiple per server, leaving the server owners only having to update a a single text file - to update all the servers you want, with your admins
+\*Admin lists is a optional way for you to support having one or multiple text files (Admin lists are textfiles with lines of Steam IDs) OR fetch admins from an API endpoint. This allows you to add one or multiple admin lists per server, leaving the server owners only having to update a single text file or API - to update all the servers you want, with your admins
 
 # The Game
 
@@ -43,8 +43,12 @@ To select either Sandbox or Survival game mode, add in `game=Sandbox` or `game=S
 
 # Admin Lists (Not required!)
 
-This plugin has the ability for the server hosters to specify one or multiple text files with lists of SteamIDs (Currently only tested with RAW Github Repo files) adding them automatically to the servers Game.ini file.
+This plugin has the ability for the server hosters to specify one or multiple text files with lists of SteamIDs (Currently only tested with RAW Github Repo files) OR fetch admins from an API endpoint, adding them automatically to the servers Game.ini file.
 This means if you are a hoster having multiple servers, and you dislike having to spend hours on adjusting each Game.ini file for adding/removings - this might be an option for you.
+
+You can choose between two modes:
+- **Text-based**: Download admin lists from text files (GitHub, etc.)
+- **API-based**: Fetch admin lists from an API endpoint
 
 1. In the servers Start Param option field add in the following (\*Examples with my test files, use your own!)
 
@@ -73,11 +77,71 @@ adminListThree could eventually be DM/Event related admins
 **OBS: Currently only supporting text file, laying online in places such as GitHub etc. (Raw text files)**
 **- In case your source for admin lists textfiles goes down, or you do not apply one - it will just keep using the Game.Ini you already have**
 
+## API-Based Admin Lists (Alternative to Text Files)
+
+Instead of using text files, you can fetch admin lists from an API endpoint. This is useful if you have a centralized admin management system.
+
+### Setup
+
+Add the following parameters to your **Server Start Param**:
+
+- `listtype=api` - Enables API mode (required for API-based lists)
+- `apiurl=...` - Your API base URL or full endpoint URL (required)
+- `apibearertoken=...` - Bearer token for authentication (optional, only if your API requires it)
+
+### API Endpoint
+
+The plugin will call: `GET {apiurl}/your-endpoint-path` (or use the full URL if provided)
+
+**Expected Response Format:**
+```json
+[
+  {
+    "steamId": "76561198000000000"
+  }
+]
+```
+
+**Note:** Only the `steamId` field is required and used. Your API response may contain other fields, but they will be ignored.
+
+### Examples
+
+**Basic API call:**
+```
+game=Survival;listtype=api;apibearertoken=your_token;apiurl=http://your-api-host:port
+```
+
+**Without Bearer token (if API doesn't require authentication):**
+```
+game=Survival;listtype=api;apiurl=http://your-api-host:port
+```
+
+**Note:** The port (`:port`) is optional - use it only if your API requires a specific port.
+
+**Note:** By default, the system will only fetch admins with type "admin". The API response may contain other fields, but only the `steamId` field is used.
+
+**OBS: If the API is unreachable or returns an error, the server will keep using the existing Game.ini without refreshing the admin list (ensuring admins remain even if the API is temporarily down)**
+
 # So how could a final Server Start Param look? (With and Without the usage of admin lists)
 
-`game=Survival` or
-`game=Survival;adminListOne=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Other/adminlist.txt` or
-`game=Sandbox;adminListOne=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Other/adminlist.txt;adminListTwo=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Other/adminlisttwo.txt`
+**Without admin lists:**
+```
+game=Survival
+```
+
+**With text-based admin lists:**
+```
+game=Survival;adminListOne=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Other/adminlist.txt
+```
+or
+```
+game=Sandbox;adminListOne=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Other/adminlist.txt;adminListTwo=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Other/adminlisttwo.txt
+```
+
+**With API-based admin lists:**
+```
+game=Survival;listtype=api;apibearertoken=your_token;apiurl=http://your-api-host:port
+```
 
 **OBS: Remember if you use Admin Lists to adjust them into your own Steam IDs. The Steam IDs & lists provided in the examples are only for an example purpose**
 
