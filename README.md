@@ -89,7 +89,7 @@ Add the following parameters to your **Server Start Param**:
 
 - `listtype=api` - Enables API mode (required for API-based lists)
 - `apiurl=...` - Your API base URL or full endpoint URL (required)
-- `apibearertoken=...` - Bearer token for authentication (optional, only if your API requires it)
+- `apibearertoken=...` - Bearer token for authentication (optional, only if your API Headers requires it)
 
 ### API Endpoint
 
