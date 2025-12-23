@@ -2,7 +2,7 @@
 
 🧩WindowsGSM plugin that provides TheIsle Legacy Dedicated server support!
 
-- A modified version of [@dkdue](https://www.github.com/dkdue)'s [Evrima](https://github.com/dkdue/WindowsGSM.TheIsle) version to benefit the good old Legacy Version, with some additions.
+- Version to benefit the good old Legacy Version, with some additions.
 
 # This version adds in support for:
 
@@ -52,11 +52,11 @@ You can choose between two modes:
 
 1. In the servers Start Param option field add in the following (\*Examples with my test files, use your own!)
 
-- `adminListOne=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Other/adminlist.txt`
+- `listtype=txt;adminListOne=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Other/adminlist.txt`
 
 You can add multiple lists by adding a semi-colon (`;`)with a new list entry such as:
 
-- `adminListOne=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Other/adminlist.txt;adminListTwo=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Other/adminlisttwo.txt`
+- `listtype=txt;adminListOne=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Other/adminlist.txt;adminListTwo=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Other/adminlisttwo.txt`
 
 -- And if you wish you can expand to this list with AdminListThree, AdminListFour - followed by the links as the examples above... etc (There should be no limit in theory)
 
@@ -118,8 +118,6 @@ game=Survival;listtype=api;apiurl=http://your-api-host:port
 
 **Note:** The port (`:port`) is optional - use it only if your API requires a specific port.
 
-**Note:** By default, the system will only fetch admins with type "admin". The API response may contain other fields, but only the `steamId` field is used.
-
 **OBS: If the API is unreachable or returns an error, the server will keep using the existing Game.ini without refreshing the admin list (ensuring admins remain even if the API is temporarily down)**
 
 # So how could a final Server Start Param look? (With and Without the usage of admin lists)
@@ -131,11 +129,11 @@ game=Survival
 
 **With text-based admin lists:**
 ```
-game=Survival;adminListOne=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Other/adminlist.txt
+game=Survival;listtype=txt;adminListOne=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Other/adminlist.txt
 ```
 or
 ```
-game=Sandbox;adminListOne=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Other/adminlist.txt;adminListTwo=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Other/adminlisttwo.txt
+game=Sandbox;listtype=txt;adminListOne=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Other/adminlist.txt;adminListTwo=https://raw.githubusercontent.com/menix1337/WindowsGSM.configs/main/Other/adminlisttwo.txt
 ```
 
 **With API-based admin lists:**
